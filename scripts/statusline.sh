@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code status line script
 # Two lines:
-#   line 1: [model] 📁 dir │ 🌿 branch (+worktrees)
+#   line 1: [model · effort] 📁 dir │ 🌿 branch (+worktrees)
 #   line 2: <ctx bar> % (tokens) │ $cost │ ⏱ to 5h │ ⏱ to 7d │ 5h/7d limits │ tmux
 # Context and cost segments are gated on numeric fields so empty/null payload
 # columns cannot shift into the wrong slot (e.g. epoch shown as $cost).
@@ -117,13 +117,14 @@ EOF
   reset_epoch=$(( $(date +%s) + 423 ))
   seven_reset_epoch=$(( $(date +%s) + 86400 ))
   payload=$(cat <<JSON
-{"model":{"display_name":"Test Model"},"workspace":{"current_dir":"$tmp_selftest/repo"},"context_window":{"used_percentage":42,"total_input_tokens":12000,"total_output_tokens":3400,"context_window_size":200000},"cost":{"total_cost_usd":1.23},"rate_limits":{"five_hour":{"resets_at":$reset_epoch,"used_percentage":70},"seven_day":{"resets_at":$seven_reset_epoch,"used_percentage":20}}}
+{"model":{"display_name":"Test Model"},"effort":{"level":"xhigh"},"workspace":{"current_dir":"$tmp_selftest/repo"},"context_window":{"used_percentage":42,"total_input_tokens":12000,"total_output_tokens":3400,"context_window_size":200000},"cost":{"total_cost_usd":1.23},"rate_limits":{"five_hour":{"resets_at":$reset_epoch,"used_percentage":70},"seven_day":{"resets_at":$seven_reset_epoch,"used_percentage":20}}}
 JSON
 )
   export HARNESS_STATUSLINE_REPO="$tmp_selftest/repo"
   export HARNESS_STATUSLINE_GIT_LOG="$tmp_selftest/git.log"
   rendered=$(PATH="$tmp_selftest/bin:$PATH" bash "$0" <<<"$payload")
   printf '%s' "$rendered" | grep -q 'Test Model' || { echo "statusline missing model: $rendered"; exit 1; }
+  printf '%s' "$rendered" | grep -q 'xhigh' || { echo "statusline missing effort mode: $rendered"; exit 1; }
   printf '%s' "$rendered" | grep -q '42%' || { echo "statusline missing context: $rendered"; exit 1; }
   printf '%s' "$rendered" | grep -q '\$1.23' || { echo "statusline missing cost: $rendered"; exit 1; }
   printf '%s' "$rendered" | grep -q 'to 5h' || { echo "statusline missing 5h timer: $rendered"; exit 1; }
@@ -139,6 +140,8 @@ JSON
   printf '%s' "$null_ctx_rendered" | grep -q '\$2.50' || { echo "null context missing cost: $null_ctx_rendered"; exit 1; }
   printf '%s' "$null_ctx_rendered" | grep -q '42%' && { echo "null context must not show context bar: $null_ctx_rendered"; exit 1; }
   printf '%s' "$null_ctx_rendered" | grep -qE '\$'"$reset_epoch" && { echo "null context showed epoch as cost: $null_ctx_rendered"; exit 1; }
+  # Models without an effort payload must render the badge with no dangling separator.
+  printf '%s' "$null_ctx_rendered" | grep -q '\[Null Ctx\]' || { echo "missing effort must not alter model badge: $null_ctx_rendered"; exit 1; }
 
   echo "selftest ok"; exit 0
 fi
@@ -148,6 +151,7 @@ input=$(cat)
 # One jq parse; use "-" sentinels so empty/null middle columns never shift TSV fields.
 fields=$(printf '%s' "$input" | jq -r '[
   (.model.display_name // "-"),
+  (.effort.level // "-"),
   (.workspace.current_dir // .cwd // "-"),
   (if (.context_window.used_percentage | type) == "number" then .context_window.used_percentage else "-" end),
   (.context_window.total_input_tokens // 0),
@@ -160,10 +164,11 @@ fields=$(printf '%s' "$input" | jq -r '[
   (if (.rate_limits.seven_day.used_percentage | type) == "number" then .rate_limits.seven_day.used_percentage else "-" end),
   (if (.rate_limits.monthly.used_percentage | type) == "number" then .rate_limits.monthly.used_percentage else "-" end)
 ] | @tsv')
-IFS=$'\t' read -r model cwd used_pct total_in total_out ctx_size cost five_reset five_pct seven_reset seven_pct monthly_pct <<EOF
+IFS=$'\t' read -r model effort cwd used_pct total_in total_out ctx_size cost five_reset five_pct seven_reset seven_pct monthly_pct <<EOF
 $fields
 EOF
 [ "$model" = "-" ] && model=""
+[ "$effort" = "-" ] && effort=""
 [ "$cwd" = "-" ] && cwd=""
 [ "$used_pct" = "-" ] && used_pct=""
 [ "$cost" = "-" ] && cost=""
@@ -173,9 +178,13 @@ EOF
 [ "$seven_pct" = "-" ] && seven_pct=""
 [ "$monthly_pct" = "-" ] && monthly_pct=""
 
-# ── Model badge ───────────────────────────────────────────────────────────────
+# ── Model badge (+ effort mode: low/medium/high/xhigh/max when supported) ────
 model_part=""
-[ -n "$model" ] && model_part="${BOLD}${C_CYAN}[${model}]${RESET}"
+if [ -n "$model" ]; then
+  model_part="${BOLD}${C_CYAN}[${model}"
+  [ -n "$effort" ] && model_part="${model_part}${RESET}${DIM} · ${RESET}${BOLD}${C_MAGENTA}${effort}${RESET}${BOLD}${C_CYAN}"
+  model_part="${model_part}]${RESET}"
+fi
 
 # ── Directory ─────────────────────────────────────────────────────────────────
 dir_part=""

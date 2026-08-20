@@ -215,7 +215,7 @@ All three steps use arrow-key menus: scope, then host (`all` when multiple hosts
 `--yes` / `-Yes` selects every compatible checklist item; `--no` / `-No` selects only `harness`. Without a TTY (or with `--yes` / `--no`), scope defaults to `user` and you must pass `--cli` when more than one host is detected.
 For Cursor, harness lands as a local plugin under `.cursor/plugins/local/harness/` (IDE) and copies each skill into `.cursor/skills/` as real `harness-*` directories (not symlinks) so the `agent` CLI slash menu can see `/harness-supervisor` and the rest.
 User-only modules (`status-line`, `shared-config`, `treehouse`) are skipped for project scope.
-The optional status line reads the CLI payload once per render, shows 5h and 7d renew countdowns when reset timestamps are present, and only enumerates linked Git worktrees when the repo actually has a worktree registry.
+The optional status line reads the CLI payload once per render, badges the model with its effort mode (`low`/`medium`/`high`/`xhigh`/`max`, omitted on models without one), shows 5h and 7d renew countdowns when reset timestamps are present, and only enumerates linked Git worktrees when the repo actually has a worktree registry.
 Windows: [`install.ps1`](install.ps1). Details: [installer docs](docs/installer/README.md).
 
 ## Start a project
