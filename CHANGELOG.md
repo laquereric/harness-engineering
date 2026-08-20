@@ -11,6 +11,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+## [3.5.0](https://github.com/vinicius91carvalho/harness-engineering/compare/v3.4.0...v3.5.0) (2026-08-20)
+
+
+### Features
+
+* **statusline:** show effort mode next to the model ([256179a](https://github.com/vinicius91carvalho/harness-engineering/commit/256179aef68ccb8661435083333291db57672689))
+
 ## [3.4.0](https://github.com/vinicius91carvalho/harness-engineering/compare/v3.3.1...v3.4.0) (2026-07-22)
 
 
