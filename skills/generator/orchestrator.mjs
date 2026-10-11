@@ -12,6 +12,7 @@ import { writeDurable } from './lib/worker-outcome.mjs'
 import { cleanupWorktreeRuntime, appendOwnedRuntime } from './lib/worktree-teardown.mjs'
 import { cleanupBrowserOrphans, startStateHeartbeat } from './lib/worker-lifecycle.mjs'
 import { buildHostCommand, hostCommands, roleNames, runHostAgentSession, terminateHostProcess } from './adapters/hosts.mjs'
+import { iqGateEnabled } from './lib/iq-gate.mjs'
 import { integrateCheckpoint } from './lib/integrate-checkpoint.mjs'
 import { featurePrompt as buildFeaturePrompt, RESOURCE_CLEANUP_RULE } from './prompts/feature.mjs'
 import { integrationBranchName } from './lib/integration-branch.mjs'
@@ -412,6 +413,7 @@ function featurePrompt(kind, feature, attempt, repairPlan = null, workdir = opti
     getVerifyFirst: (wd) => verifyFirstCache.get(wd),
     integrationBranch: integrationBranchName(options.repo),
     observationMethods,
+    iqGate: iqGateEnabled(),
   })
 }
 

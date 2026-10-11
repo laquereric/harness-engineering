@@ -1,6 +1,25 @@
+import { fileURLToPath } from 'node:url'
 import { VERDICT_HINT } from '../lib/worker-outcome.mjs'
 
 export { VERDICT_HINT }
+
+/** Absolute path of the bundled CpCp browser client, so any worker host can run it (docs/iq-standards.md §3). */
+export const CPCP_BROWSER_CLIENT = fileURLToPath(new URL('../../../scripts/cpcp-browser.mjs', import.meta.url))
+
+/**
+ * Injected into coding/QA/integration prompts when the IQ gate is on (ADR-0023): browser checks must go through
+ * a governed engine, refusals are evidence, and Playwright MCP (ungoverned) is not admitted.
+ */
+export const IQ_GATE_RULE =
+  'IQ GATE (ADR-0023): this worker is governed by the IQ CpCp seam — every tool call is permit-checked and ' +
+  'journaled before it runs, and a refusal comes back as a value with a reason code (unauthenticated, ' +
+  'out_of_scope, no_permit, …). A refused call is evidence: record its operation_id and reason in the ' +
+  'Workflow Journal or Defect Report, do not retry it blindly, and do not look for an ungoverned way around it. ' +
+  'For browser Acceptance Checks use a governed engine only: the IQ CpCp browser via ' +
+  `\`node ${CPCP_BROWSER_CLIENT} navigate --url …\` / \`eval --expr …\` / \`console\` (POST /_cpcp; ` +
+  'exit 1 = refused as a value, exit 2 = endpoint unreachable — fail closed), or the IQ app webview drive ' +
+  'surface (`iq_drive`) when driving the IQ app itself. Do NOT use Playwright MCP or launch any other browser ' +
+  'while the gate is on. Keep the black-box rule: `browser.eval` reads what a user could observe, not internals.'
 
 export function sharedRootWarning(integrationBranch = 'main') {
   return `You are operating directly on this repository's shared integration branch (${integrationBranch}) for the active Project Goal — used by every Work Item and subproject in this monorepo. Never commit, merge, push, or cherry-pick to main/master while this plan is in flight; isolated Work Items land on gen/* branches and merge only into ${integrationBranch}. Never run \`git reset\` (soft, mixed, or hard), \`git checkout -- .\`, \`git clean -f\`, or any other command that discards or rewrites committed history. If you are ever unsure whether an action is safe, stop and report the problem instead of guessing. Run every git command one at a time and wait for it to finish before running the next — never issue two git commands in parallel or overlapping tool calls, even independent-looking ones like \`git status\` alongside \`git add\`. Two git processes writing to this same working tree at once collide on \`.git/index.lock\` (\`fatal: Unable to create .../index.lock: File exists\`) and the Work Item gets reported as failed even though nothing was actually wrong with your resolution.`
@@ -90,6 +109,7 @@ function verifyFirstBoundaryHint(methods = []) {
 export function featurePrompt(kind, feature, attempt, repairPlan = null, workdir, options = {}) {
   const port = options.port ?? '5170'
   const getVerifyFirst = options.getVerifyFirst ?? (() => false)
+  const gateRule = options.iqGate ? `${IQ_GATE_RULE} ` : ''
   const base = `WORKDIR=${workdir}\nPORT=${port}\nWork Item id=${feature.id} context=${feature.context}\n` +
     `Acceptance Checks=${(feature.acceptance_checks || []).join(',')}\nDescription=${feature.description || ''}\n`
   if (kind === 'CODING') {
@@ -109,15 +129,15 @@ export function featurePrompt(kind, feature, attempt, repairPlan = null, workdir
     return head +
       `${NO_REDELEGATE_RULE} ` +
       `${repairPlan ? `Follow this Repair Plan from the orchestrator:\n${JSON.stringify(repairPlan)}\n` : ''}` +
-      `Read the exact queue entry and Workflow Journal. ${verifyAlign} ${APP_START_RULE} Commit every product and harness-probe change on this gen branch before claiming implementation=true — Integrated Verification merges into the plan branch and will fail on worktree-only WIP or untracked .harness/wi-ac-* files that block merge. Do NOT edit feature_list.json, Execution Ledger flags, or Workflow Journal files — return product commits and a verdict only; the orchestrator owns workflow transitions. ${RESOURCE_CLEANUP_RULE} Return one JSON object: {"id":"...","implementation":true|false,"notes":"..."}. ${VERDICT_HINT}`
+      `${gateRule}Read the exact queue entry and Workflow Journal. ${verifyAlign} ${APP_START_RULE} Commit every product and harness-probe change on this gen branch before claiming implementation=true — Integrated Verification merges into the plan branch and will fail on worktree-only WIP or untracked .harness/wi-ac-* files that block merge. Do NOT edit feature_list.json, Execution Ledger flags, or Workflow Journal files — return product commits and a verdict only; the orchestrator owns workflow transitions. ${RESOURCE_CLEANUP_RULE} Return one JSON object: {"id":"...","implementation":true|false,"notes":"..."}. ${VERDICT_HINT}`
   }
   if (kind === 'QA') return `You are the qa-agent. Independently test exactly this Work Item in its isolated worktree.\n${base}` +
-    `${NO_REDELEGATE_RULE} ` +
+    `${NO_REDELEGATE_RULE} ${gateRule}` +
     `${APP_START_RULE} Exercise the mapped Acceptance Checks using the observation method they specify (grep/file audit, CLI exit code, real HTTP, or real browser). Do not start a server or browser for a check that is already a static audit. Once the checks pass or fail, emit the harness verdict immediately — do not keep re-analyzing. Do NOT edit feature_list.json or Workflow Journal files; the orchestrator records qa/implementation flags from your verdict. ${RESOURCE_CLEANUP_RULE} Return only JSON: {"id":"...","qa":true|false,"implementation":true|false,"defects":["expected ...; observed ...; evidence ..."]}. ${VERDICT_HINT}`
   if (kind === 'INTEGRATION_QA') {
     const branch = options.integrationBranch || 'main'
     return `You are the qa-agent performing Integrated Verification on latest ${branch}.\n${base}` +
-    `${NO_REDELEGATE_RULE} ` +
+    `${NO_REDELEGATE_RULE} ${gateRule}` +
     `${APP_START_RULE} Run the mapped Acceptance Checks using the observation method they specify (grep/file audit, CLI, real HTTP, or real browser). Do not start a server or browser for a static audit check. Emit the harness verdict as soon as the checks pass or fail. Do NOT edit feature_list.json or Workflow Journal files; the orchestrator records integration flags from your verdict. ${RESOURCE_CLEANUP_RULE} Return only JSON: {"id":"...","integration":true|false,"implementation":true|false,"defects":["expected ...; observed ...; evidence ..."]}. ${VERDICT_HINT}\n${sharedRootWarning(branch)}`
   }
   if (kind === 'REPAIR_PLAN') return `Act as the orchestrator repair planner. Do not modify files. Diagnose the QA Defect Report against the Work Item and repository.\n${base}` +

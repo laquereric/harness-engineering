@@ -32,6 +32,14 @@ done
 
 export PATH="$TMP/bin:/usr/bin:/bin"
 export HOME="$TMP/home"
+# iq-gate reads the IQ adapters from IQ_REPO (never vendored); a stub checkout stands in for ~/NoIcloud/Iq.
+export IQ_REPO="$TMP/iqrepo"
+IQ_ADAPTERS="$IQ_REPO/Development/UseCase/UC_IqManagedHarnesses/adapters"
+mkdir -p "$IQ_ADAPTERS/claude-code-hook/commands" "$IQ_ADAPTERS/opencode"
+printf '#!/usr/bin/env python3\n' >"$IQ_ADAPTERS/claude-code-hook/iq-gate-hook.py"
+printf '#!/usr/bin/env python3\n' >"$IQ_ADAPTERS/claude-code-hook/iq-session-banner.py"
+printf '# /iq\n' >"$IQ_ADAPTERS/claude-code-hook/commands/iq.md"
+printf '// iq-harness-gate stub\n' >"$IQ_ADAPTERS/opencode/iq-harness-gate.ts"
 export XDG_CONFIG_HOME="$TMP/home/.config"
 export HARNESS_TEST_LOG="$TMP/commands.log"
 
@@ -111,6 +119,12 @@ grep -q 'npx skills add nutlope/hallmark --skill hallmark -g --yes' "$TMP/out" |
 grep -q 'curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh' "$TMP/out" || fail 'no-mistakes installer should appear in dry-run'
 grep -q 'no-mistakes init in each repository' "$TMP/out" || fail 'no-mistakes init follow-up should appear in dry-run'
 grep -q 'curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh' "$TMP/out" || fail 'treehouse installer should appear in dry-run'
+grep -q "wire IQ gate (CpCp seam adapters from $IQ_ADAPTERS) for:claude codex opencode pi agent (scope: user)" "$TMP/out" \
+  || fail 'iq-gate dry-run should name the IQ adapters and every selected host'
+grep -q "hook settings to $HOME/.local/share/harness/iq-gate/claude-settings.json" "$TMP/out" \
+  || fail 'iq-gate dry-run should target the user-scope Claude hook settings'
+grep -q "install OpenCode plugin to $HOME/.config/opencode/plugins/iq-harness-gate.ts" "$TMP/out" \
+  || fail 'iq-gate dry-run should target the user-scope OpenCode plugins dir'
 pass 'dry-run performs no writes or host commands'
 
 PROJECT=$TMP/project
@@ -149,6 +163,8 @@ if grep -q 'curl -fsSL' "$TMP/out"; then
 fi
 grep -q "install crawl4ai skill to $PROJECT/.opencode/skills/crawl4ai" "$TMP/out" \
   || fail 'project-scope crawl4ai skill should target project .opencode'
+grep -q "install OpenCode plugin to $PROJECT/.opencode/plugins/iq-harness-gate.ts" "$TMP/out" \
+  || fail 'project-scope iq-gate should target the project .opencode/plugins dir'
 "$ROOT/install.sh" --cli claude --scope project --project-dir "$PROJECT" --yes --dry-run </dev/null >"$TMP/out"
 grep -q 'skipping status-line (user scope only)' "$TMP/out" || fail 'project scope should skip status-line for Claude'
 grep -q 'skipping shared-config (user scope only)' "$TMP/out" || fail 'project scope should skip shared-config'
@@ -460,6 +476,11 @@ TMPDIR="$TMP/systmp" VERSION=v2.0.0 "$TMP/remote/install.sh" --cli claude --yes 
   || fail 'remote-style install should succeed'
 grep -q -- '--branch v2.0.0' "$GIT_STUB_LOG" || fail 'remote install must clone the pinned release tag'
 grep -q 'staging release v2.0.0' "$TMP/out" "$TMP/err" || fail 'remote install should announce the staged release tag'
+test -f "$HOME/.local/share/harness/iq-gate/claude-settings.json" \
+  || fail 'user-scope --yes install should write the iq-gate Claude hook settings'
+jq -e --arg hook "$IQ_ADAPTERS/claude-code-hook/iq-gate-hook.py" '.hooks.PreToolUse[0].hooks[0].command == $hook' \
+  "$HOME/.local/share/harness/iq-gate/claude-settings.json" >/dev/null \
+  || fail 'user-scope iq-gate settings must point the PreToolUse hook at IQ_REPO'
 cmd=$(jq -r '.statusLine.command' "$HOME/.claude/settings.json")
 script_path=${cmd#bash }
 [ -f "$script_path" ] || fail 'statusline script must survive installer temp-dir cleanup'
@@ -615,7 +636,7 @@ for host in claude codex opencode pi agent; do
   MATRIX_PROJECT=$TMP/matrix-$host
   rm -rf "$MATRIX_PROJECT" \
     "$HOME/.claude" "$HOME/.codex" "$HOME/.config" "$HOME/.agents" "$HOME/.cursor" \
-    "$HOME/.local/bin" "$HOME/.local/share/harness/crawl4ai-venv"
+    "$HOME/.local/bin" "$HOME/.local/share/harness/crawl4ai-venv" "$HOME/.local/share/harness/iq-gate"
   mkdir -p "$MATRIX_PROJECT"
   if MATRIX_PROJECT=$(CDPATH= cd -- "$MATRIX_PROJECT" && pwd -P 2>/dev/null); then
     :
@@ -638,6 +659,16 @@ for host in claude codex opencode pi agent; do
         || fail 'Claude project matrix missing crawl4ai skill'
       test -f "$MATRIX_PROJECT/.claude/skills/hallmark/SKILL.md" \
         || fail 'Claude project matrix missing hallmark skill'
+      test -f "$MATRIX_PROJECT/.harness/iq-gate/claude-settings.json" \
+        || fail 'Claude project matrix missing iq-gate hook settings'
+      jq -e --arg hook "$IQ_ADAPTERS/claude-code-hook/iq-gate-hook.py" \
+        '.hooks.PreToolUse[0].hooks[0].command == $hook and .hooks.PreToolUse[0].matcher == ".*"' \
+        "$MATRIX_PROJECT/.harness/iq-gate/claude-settings.json" >/dev/null \
+        || fail 'Claude iq-gate settings must wire the PreToolUse hook from IQ_REPO on every tool'
+      test -f "$MATRIX_PROJECT/.claude/commands/iq.md" \
+        || fail 'Claude project matrix missing /iq command'
+      test ! -e "$HOME/.local/share/harness/iq-gate/claude-settings.json" \
+        || fail 'project-scope iq-gate must not write user-scope hook settings'
       ;;
     codex)
       test -f "$MATRIX_PROJECT/.codex-plugin/plugin.json" || fail 'Codex project matrix missing plugin manifest'
@@ -659,6 +690,8 @@ for host in claude codex opencode pi agent; do
         || fail 'OpenCode project matrix missing hallmark skill'
       jq -e '.mcp.playwright' "$MATRIX_PROJECT/.opencode/opencode.json" >/dev/null \
         || fail 'OpenCode project matrix missing playwright MCP'
+      test -f "$MATRIX_PROJECT/.opencode/plugins/iq-harness-gate.ts" \
+        || fail 'OpenCode project matrix missing iq-gate plugin'
       ;;
     pi)
       test -f "$MATRIX_PROJECT/.agents/skills/planner/SKILL.md" || fail 'Pi project matrix missing planner skill'
@@ -718,3 +751,15 @@ for host in claude codex opencode pi agent; do
   pass "project-scope matrix keeps $host installs inside the project folder"
 done
 pass 'project-scope matrix installs every host/plugin without global host trees'
+
+# iq-gate fails closed: no IQ adapters under IQ_REPO -> the installer refuses instead of writing a half gate.
+: >"$HARNESS_TEST_LOG"
+MISSING_PROJECT=$TMP/iq-missing
+mkdir -p "$MISSING_PROJECT"
+if IQ_REPO="$TMP/no-such-iq" "$ROOT/install.sh" --cli opencode --scope project --project-dir "$MISSING_PROJECT" --yes \
+    </dev/null >"$TMP/out" 2>"$TMP/err"; then
+  fail 'iq-gate must refuse to install when the IQ adapters are missing'
+fi
+grep -q 'iq-gate: IQ adapters not found under' "$TMP/err" || fail 'iq-gate refusal should name the missing adapters dir'
+test ! -e "$MISSING_PROJECT/.opencode/plugins/iq-harness-gate.ts" || fail 'iq-gate must not write a plugin without adapters'
+pass 'iq-gate fails closed without IQ adapters'

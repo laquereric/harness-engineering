@@ -91,5 +91,15 @@ needs assets, because `$PSScriptRoot` is empty.
 
 Playwright and Crawl4AI are optional integrations on all hosts.
 
+`iq-gate` (Claude, OpenCode) wires the IQ governance gate: it reads the IQ
+adapters from `IQ_REPO` (default `~/NoIcloud/Iq`) and refuses to install when
+they are absent (set `IQ_REPO` or `brew install iq-substrate`). User scope writes
+`~/.local/share/harness/iq-gate/claude-settings.json` and `~/.claude/commands/iq.md`;
+project scope writes `$PROJECT/.harness/iq-gate/claude-settings.json` and
+`$PROJECT/.claude/commands/iq.md`; OpenCode gets `plugins/iq-harness-gate.ts`
+under its resolved config base. The seam (`IQ_SEAM_URL`, default
+`http://127.0.0.1:8099`) is never started by the installer. See
+[docs/iq-standards.md](../iq-standards.md).
+
 Optional role routing uses `config/roles.example.json` copied to `.harness/roles.json`.
 The [complete guide](../../README.md#optional-role-routing) shows routing and background worker monitoring.

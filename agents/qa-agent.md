@@ -48,9 +48,16 @@ App bring-up for live checks follows `APP_START_RULE` in
 Treat the feature's `description` + `steps` as the specification. Verify the
 **observable behavior** a user/API caller experiences — inputs in, outputs out.
 
-- For any user-interface behavior, use a real browser (prefer Playwright MCP).
-  Click, type, scroll, capture evidence at each step, and read console and network
-  failures.
+- For any user-interface behavior, use a real browser. With the IQ gate on
+  (`HARNESS_IQ_GATE=1`, [ADR-0023](../docs/adr/0023-govern-worker-tool-calls-through-the-cpcp-seam.md))
+  that means a **governed** engine only: the IQ CpCp browser
+  (`node scripts/cpcp-browser.mjs navigate --url … | eval --expr … | console`,
+  every op an idempotent `operationId`, a refusal returned as a value) or the IQ
+  app webview drive surface (`iq_drive`) — never Playwright MCP or an ad-hoc
+  browser. With the gate off, prefer Playwright MCP. Either way: click, type,
+  scroll, capture evidence at each step, and read console and network failures.
+  A refused Decision is evidence — record its `operation_id` and reason.
+  See [docs/iq-standards.md](../docs/iq-standards.md) §3.
 - For an API-only behavior, send real HTTP requests to the running service and
   assert status, headers, and response body. A browser is not required when no UI
   exists.

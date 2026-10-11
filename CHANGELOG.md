@@ -11,6 +11,10 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Features
+
+* **iq-gate:** adopt the IQ standards (ADR-0023): one CpCp gate seam for every worker tool call (`HARNESS_IQ_GATE=1`, seam preflight, fail closed), the `iq-gate` installer module (Claude hook settings, OpenCode plugin, `/iq`), browser observation through CpCp (`scripts/cpcp-browser.mjs` for the headless `/_cpcp` browser; the IQ app Tauri webview `iq_drive`), and `docs/iq-standards.md`.
+
 ## [3.5.0](https://github.com/vinicius91carvalho/harness-engineering/compare/v3.4.0...v3.5.0) (2026-08-20)
 
 
