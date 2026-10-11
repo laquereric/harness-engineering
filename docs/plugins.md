@@ -16,6 +16,8 @@ User-only modules (`status-line`, `shared-config`, `treehouse`) are hidden under
 | `playwright` | claude, codex, opencode, agent | MCP server | [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp) | Browser automation and E2E testing through Microsoft's MCP server. Under project scope, Claude/OpenCode/Cursor write project MCP config; Codex is skipped (Codex MCP is user-global only). |
 | `crawl4ai` | claude, codex, opencode, pi, agent | skill | `packages/crawl4ai` in this repo | Web crawling and structured extraction. User scope installs the Python package (`pip install -U crawl4ai`, `crawl4ai-setup`, `crawl4ai-doctor`) plus the skill; project scope copies only the bundled skill into the project host paths. |
 
+Governance is not a plugin row of its own kind: the `iq-gate` extra ([extras.md](extras.md)) attaches Claude Code and OpenCode to the IQ CpCp seam so every worker tool call — and every browser check — is a permit-checked Decision ([IQ standards](iq-standards.md), [ADR-0023](adr/0023-govern-worker-tool-calls-through-the-cpcp-seam.md)). With the gate on, `playwright` is the ungoverned path and is not used for browser checks; the IQ CpCp browser (`scripts/cpcp-browser.mjs`) or the IQ app webview is.
+
 Host marketplace JSON files (`.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json`, `.cursor-plugin/marketplace.json`) are generated from `config/installable-catalog.json` and `MARKETPLACE_HOSTS` in `scripts/install-reconcile.mjs`.
 Do not hand-edit them; run `node scripts/install-reconcile.mjs generate-marketplaces` after catalog or host-recipe changes, then `node scripts/install-reconcile.mjs validate`.
 

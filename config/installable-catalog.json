@@ -78,6 +78,17 @@
       "hosts": ["claude"],
       "scopes": ["user"],
       "description": "Shared Claude settings merge"
+    },
+    {
+      "id": "iq-gate",
+      "kind": "extra",
+      "optional": true,
+      "hosts": ["claude", "opencode"],
+      "scopes": ["user", "project"],
+      "description": "IQ governance gate: attach worker hosts to the CpCp seam (ADR-0023)",
+      "acquisition": {
+        "iqRepo": { "env": "IQ_REPO", "default": "~/NoIcloud/Iq", "adapters": "Development/UseCase/UC_IqManagedHarnesses/adapters" }
+      }
     }
   ]
 }

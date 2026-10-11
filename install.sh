@@ -9,7 +9,7 @@ REPO_URL="https://github.com/$MARKETPLACE_REPO.git"
 NO_MISTAKES_INSTALLER="https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh"
 TREEHOUSE_INSTALLER="https://kunchenguid.github.io/treehouse/install.sh"
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || true)
-DEFAULT_OPTIONAL="hallmark no-mistakes treehouse playwright crawl4ai status-line shared-config"
+DEFAULT_OPTIONAL="hallmark no-mistakes treehouse playwright crawl4ai iq-gate status-line shared-config"
 OPTIONAL=$DEFAULT_OPTIONAL
 if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/config/installable-catalog.json" ] && command -v node >/dev/null 2>&1; then
   OPTIONAL=$(node "$REPO_ROOT/scripts/install-reconcile.mjs" optional-ids 2>/dev/null) || OPTIONAL=$DEFAULT_OPTIONAL
@@ -154,6 +154,7 @@ menu_item_blurb() {
     install:crawl4ai) printf '%s' "Web crawling and structured extraction. Installs the Python package plus a bundled skill per host." ;;
     install:status-line) printf '%s' "Custom status bar for Claude; built-in status items for Codex (model, git branch, context usage)." ;;
     install:shared-config) printf '%s' "Atomically merge the project shareable Claude settings while preserving your existing preferences." ;;
+    install:iq-gate) printf '%s' "IQ governance gate: attach Claude Code (PreToolUse hook) and OpenCode (plugin) to the IQ CpCp seam; needs an IQ checkout (IQ_REPO)." ;;
   esac
 }
 
@@ -418,6 +419,7 @@ plugin_clis() {
     crawl4ai) echo 'claude codex opencode pi agent' ;;
     status-line) echo 'claude codex' ;;
     shared-config) echo claude ;;
+    iq-gate) echo 'claude opencode' ;;
   esac
 }
 
@@ -960,6 +962,70 @@ install_playwright_mcp() {
   done
 }
 
+# IQ governance gate (ADR-0023, docs/iq-standards.md): wire each host's thin adapter to the ONE CpCp seam.
+# The adapters are IQ-owned and read from the IQ checkout (IQ_REPO); nothing is vendored, nothing starts the
+# seam. Claude attaches per worker via `claude --settings <hooks json>` (the orchestrator appends it under
+# HARNESS_IQ_GATE=1); OpenCode discovers its plugin from the config plugins/ dir. Fail closed: no adapters,
+# no install.
+iq_gate_dir() {
+  if [ "$SCOPE" = project ]; then printf '%s\n' "$PROJECT_DIR/.harness/iq-gate"
+  else printf '%s\n' "$RECEIPT_DIR/iq-gate"
+  fi
+}
+
+claude_commands_root() {
+  if [ "$SCOPE" = project ]; then printf '%s\n' "$PROJECT_DIR/.claude/commands"
+  else printf '%s\n' "$HOME/.claude/commands"
+  fi
+}
+
+install_iq_gate() {
+  iq_repo=${IQ_REPO:-$HOME/NoIcloud/Iq}
+  adapters=$iq_repo/Development/UseCase/UC_IqManagedHarnesses/adapters
+  hook_dir=$adapters/claude-code-hook
+  gate_dir=$(iq_gate_dir)
+  seam=${IQ_SEAM_URL:-http://127.0.0.1:8099}
+  if [ -n "$DRY" ]; then
+    echo "DRY RUN — wire IQ gate (CpCp seam adapters from $adapters) for:$CLI (scope: $SCOPE)"
+    for cli in $CLI; do
+      has_word "$(plugin_clis iq-gate)" "$cli" || continue
+      case "$cli" in
+        claude) echo "DRY RUN — write Claude PreToolUse/SessionStart hook settings to $gate_dir/claude-settings.json and /iq command to $(claude_commands_root)/iq.md" ;;
+        opencode) echo "DRY RUN — install OpenCode plugin to $(opencode_base)/plugins/iq-harness-gate.ts" ;;
+      esac
+    done
+    return
+  fi
+  [ -f "$hook_dir/iq-gate-hook.py" ] && [ -f "$hook_dir/iq-session-banner.py" ] && [ -f "$adapters/opencode/iq-harness-gate.ts" ] \
+    || die "iq-gate: IQ adapters not found under $adapters (set IQ_REPO to your Iq checkout, or brew install iq-substrate)"
+  for cli in $CLI; do
+    has_word "$(plugin_clis iq-gate)" "$cli" || continue
+    case "$cli" in
+      claude)
+        mkdir -p "$gate_dir"
+        cat >"$gate_dir/claude-settings.json" <<JSON
+{
+  "hooks": {
+    "SessionStart": [ { "hooks": [ { "type": "command", "command": "$hook_dir/iq-session-banner.py" } ] } ],
+    "PreToolUse":   [ { "matcher": ".*", "hooks": [ { "type": "command", "command": "$hook_dir/iq-gate-hook.py" } ] } ]
+  }
+}
+JSON
+        if [ -f "$hook_dir/commands/iq.md" ]; then
+          mkdir -p "$(claude_commands_root)"; cp "$hook_dir/commands/iq.md" "$(claude_commands_root)/iq.md"
+        fi
+        record_receipt iq-gate "{\"host\":\"claude\",\"settings\":\"$gate_dir/claude-settings.json\",\"seam\":\"$seam\"}"
+        echo "install.sh: IQ gate for Claude -> $gate_dir/claude-settings.json (workers attach with HARNESS_IQ_GATE=1)" ;;
+      opencode)
+        dest=$(opencode_base)/plugins
+        mkdir -p "$dest"; cp "$adapters/opencode/iq-harness-gate.ts" "$dest/iq-harness-gate.ts"
+        record_receipt iq-gate "{\"host\":\"opencode\",\"plugin\":\"$dest/iq-harness-gate.ts\",\"seam\":\"$seam\"}"
+        echo "install.sh: IQ gate for OpenCode -> $dest/iq-harness-gate.ts" ;;
+    esac
+  done
+  echo "install.sh: the seam must be up at $seam before governed runs (iq-seam-install, or iq-seam-dev.sh offline); check with iq / /iq"
+}
+
 [ -n "$DRY" ] || case " $SELECTED " in
   *' status-line '*|*' shared-config '*|*' playwright '*)
     ensure_jq ;;
@@ -986,6 +1052,7 @@ for item in $SELECTED; do
     playwright) install_playwright_mcp ;;
     status-line) for cli in $CLI; do case "$cli" in claude) enable_status_line ;; codex) enable_codex_status_line ;; esac; done ;;
     shared-config) apply_shared_config ;;
+    iq-gate) install_iq_gate ;;
     *) for cli in $CLI; do install_plugin "$item" "$cli"; done ;;
   esac
 done

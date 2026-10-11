@@ -4,8 +4,8 @@ The harness turns a **Project Goal** into independently checked work while keepi
 
 ## Bounded contexts
 
-Four contexts matter.
-Only the **workflow pipeline** is required to deliver software; the others are optional packaging or control surfaces.
+Five contexts matter.
+Only the **workflow pipeline** is required to deliver software; the others are optional packaging, control, or governance surfaces.
 
 | Context | What lives here | You interact through |
 | --- | --- | --- |
@@ -13,6 +13,7 @@ Only the **workflow pipeline** is required to deliver software; the others are o
 | **Workflow pipeline** | `project_specs.xml`, `feature_list.json` (Work Item catalog), Execution Ledger, `orchestrator.mjs`, `workflow/attempt-machine.mjs`, `lib/claim-lease.mjs` (CLI: `claim.sh` / `claim.ps1`), Goal Review policy | Skills below + files in your repo |
 | **Supervisor control** | `harness-control.mjs`, Resource Governor, Control Journal (Control Events + Input Requests) | `/harness:supervisor` |
 | **Optional routing** | `.harness/roles.json`, MCP servers | `config/roles.example.json` |
+| **Governance gate (IQ, optional)** | the CpCp seam (`IQ_SEAM_URL`), per-host adapters from `IQ_REPO`, `skills/generator/lib/iq-gate.mjs`, `scripts/cpcp-browser.mjs` | `iq-gate` installer module + `HARNESS_IQ_GATE=1`; `iq` / `/iq` for status ([IQ standards](docs/iq-standards.md)) |
 
 **Skills** (under `skills/`) are what **you** type in chat — planner, setup, generator, supervisor, evaluator.
 They prepare specs, start runs, or relay progress.
@@ -314,6 +315,22 @@ _Avoid_: ban, removal
 **Repair Budget**:
 The number of QA rejections allowed on one Work Item before switching to the next coder; set by `HARNESS_REPAIR_BUDGET`, default 2.
 _Avoid_: Attempt limit, retry cap
+
+**CpCp Seam**:
+The one local gate (`IQ_SEAM_URL`, default `http://127.0.0.1:8099`) every governed worker host hits before a tool call: a PUSH `{operationId, session, tool, args}` answered by a Decision, authenticated to a real actor, permit-checked, and journaled (ADR-0023, `docs/iq-standards.md`).
+_Avoid_: per-host ACL, prompt-level permission rules, MCP allowlist
+
+**Decision**:
+The seam's verdict on one tool call or browser op: `admitted` with a `capability` (`mcp:call:<tool>`) and the authenticated `actor`, or a refusal as a value with a stable reason code (`unauthenticated`, `out_of_scope`, `operation_id_required`, `no_permit`). Idempotent on `operationId`; a refusal is an Evidence Artifact.
+_Avoid_: exception, HTTP error, permission prompt
+
+**IQ Gate**:
+The harness run mode (`HARNESS_IQ_GATE=1`) in which `adapters/hosts.mjs` attaches each worker to the CpCp Seam through its thin adapter (Claude `--settings` hook, OpenCode plugin) and preflights the seam before spawning; hosts without an adapter, a missing hook file, or an unreachable seam are refused (fail closed) with an `iq_gate_*` reason.
+_Avoid_: ungoverned fallback, soft warning, second supervisor
+
+**Governed Browser**:
+The engine that satisfies Observation Method `browser` under the IQ Gate: the IQ CpCp browser (`POST /_cpcp`, driven by `scripts/cpcp-browser.mjs`) or the IQ app's Tauri webview drive surface (`iq_drive`), each op a CpCp PUSH with an `operationId`. Playwright MCP is the ungoverned path and is not admitted while the gate is on.
+_Avoid_: Playwright under the gate, JS evaluation into internals, screenshot-only proof
 
 **noCredits tier**:
 An optional free fallback list in `roles.json`, reached only when paid candidates are exhausted by infrastructure or credit errors.

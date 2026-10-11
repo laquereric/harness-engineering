@@ -123,8 +123,8 @@
           </div>
 
           <h3>Context map</h3>
-          <p>Four contexts matter.
-          Only the <strong>workflow pipeline</strong> is required to deliver software; the others are optional packaging or control surfaces.</p>
+          <p>Five contexts matter.
+          Only the <strong>workflow pipeline</strong> is required to deliver software; the others are optional packaging, control, or governance surfaces.</p>
           <table>
             <thead><tr><th>Context</th><th>What lives here</th><th>You interact through</th></tr></thead>
             <tbody>
@@ -132,6 +132,7 @@
               <tr><td><strong>Workflow pipeline</strong></td><td><code>project_specs.xml</code>, <code>feature_list.json</code> (catalog), Execution Ledger, <code>orchestrator.mjs</code>, <code>claim-lease.mjs</code></td><td>Skills + files in your repo</td></tr>
               <tr><td><strong>Supervisor control</strong></td><td><code>harness-control.mjs</code>, host-wide Resource Governor, Control Journal</td><td><code>/harness:supervisor</code></td></tr>
               <tr><td><strong>Optional routing</strong></td><td><code>.harness/roles.json</code>, MCP servers</td><td><code>config/roles.example.json</code></td></tr>
+              <tr><td><strong>Governance gate (IQ, optional)</strong></td><td>the CpCp seam (<code>IQ_SEAM_URL</code>), per-host adapters, <code>iq-gate.mjs</code>, <code>cpcp-browser.mjs</code></td><td><code>iq-gate</code> installer module + <code>HARNESS_IQ_GATE=1</code> (<a href="https://github.com/vinicius91carvalho/harness-engineering/blob/main/docs/iq-standards.md">IQ standards</a>)</td></tr>
             </tbody>
           </table>
           <div class="mermaid-wrap">
@@ -155,6 +156,9 @@ flowchart TB
   subgraph RT["Optional routing"]
     ROLES[roles.json]
   end
+  subgraph GOV["Governance gate (IQ, optional)"]
+    SEAM[CpCp seam]
+  end
   INS --> PIPE
   DRAFT --> REVIEW
   REVIEW --> SPEC
@@ -163,6 +167,7 @@ flowchart TB
   ORCH --> CLAIM
   HC --> CLAIM
   ROLES -.-> ORCH
+  ORCH -.->|HARNESS_IQ_GATE=1: every worker tool call| SEAM
             </pre>
           </div>
 
@@ -957,6 +962,7 @@ cp config/roles.example.json .harness/roles.json</code></pre>
           <div class="links">
             <a href="https://github.com/vinicius91carvalho/harness-engineering/blob/main/docs/installer/README.md"><strong>Installer</strong><span>Flags, host selection, scopes, and dry runs.</span></a>
             <a href="https://github.com/vinicius91carvalho/harness-engineering/blob/main/docs/plugins.md"><strong>Plugins</strong><span>Optional integrations and compatibility.</span></a>
+            <a href="https://github.com/vinicius91carvalho/harness-engineering/blob/main/docs/iq-standards.md"><strong>IQ standards</strong><span>The CpCp gate seam, governed browser observation, and the IQ app webview drive surface.</span></a>
             <a href="https://github.com/vinicius91carvalho/harness-engineering/blob/main/docs/backup-sync.md"><strong>Backup</strong><span>Sanitized configuration backup and restore.</span></a>
             <a href="https://github.com/vinicius91carvalho/harness-engineering/tree/main/docs/adr"><strong>Decisions</strong><span>Why the durable workflow is designed this way.</span></a>
           </div>

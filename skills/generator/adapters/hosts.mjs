@@ -1,5 +1,6 @@
 import { hasCompleteVerdict, parseVerdict } from '../lib/worker-outcome.mjs'
 import { spawnHostAgent, terminateHostProcess } from '../lib/worker-lifecycle.mjs'
+import { iqGateHostArgs, iqGatePreflight } from '../lib/iq-gate.mjs'
 
 /** Default models for hosts that require one when roles.json omits model. */
 const DEFAULT_HOST_MODELS = {
@@ -7,11 +8,18 @@ const DEFAULT_HOST_MODELS = {
   pi: 'opencode-go/deepseek-v4-flash',
 }
 
-/** Build a host CLI invocation for `.harness/roles.json` routing with an optional model override. */
+/**
+ * Build a host CLI invocation for `.harness/roles.json` routing with an optional model override.
+ * Under the IQ gate (`HARNESS_IQ_GATE=1`, ADR-0023) Claude is attached to the CpCp seam with
+ * `--settings <hooks json>`; the seam preflight in `runHostAgentSession` refuses the spawn if that file,
+ * the seam, or a host adapter is missing.
+ */
 export function buildHostCommand(harness, prompt, model) {
   switch (harness) {
-    case 'claude':
-      return model ? ['claude', ['-p', '--model', model, prompt]] : ['claude', ['-p', prompt]]
+    case 'claude': {
+      const gate = iqGateHostArgs('claude')
+      return model ? ['claude', ['-p', '--model', model, ...gate, prompt]] : ['claude', ['-p', ...gate, prompt]]
+    }
     case 'codex':
       return model
         ? ['codex', ['exec', '--model', model, '--dangerously-bypass-approvals-and-sandbox', prompt]]
@@ -66,6 +74,12 @@ export async function runHostAgentSession({
   onChildPid = null,
   onAgentOutput = null,
 } = {}) {
+  // IQ gate preflight (ADR-0023): fail closed before any process exists. A refusal is a value the route
+  // loop records (fallback reason / Evidence Artifact); it is never thrown.
+  const gate = await iqGatePreflight({ harness: program })
+  if (!gate.ok) {
+    return { ok: false, code: null, detail: gate.detail, stdout: '', stderr: gate.detail, parsed: null, timedOut: false, iqGate: gate }
+  }
   return await new Promise((resolveRun) => {
     let child = spawnHostAgent(program, args, { cwd, env })
     let stdout = ''

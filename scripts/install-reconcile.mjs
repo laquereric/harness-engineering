@@ -39,7 +39,7 @@ const MARKETPLACE_HOSTS = {
 const FORBIDDEN_MARKETPLACE = new Set([
   'codebase-memory-mcp', 'context7', 'playwright', 'crawl4ai',
   'lavish-axi', 'hallmark', 'no-mistakes', 'treehouse', 'firstmate', 'ponytail',
-  'status-line', 'shared-config', 'mcp-servers',
+  'status-line', 'shared-config', 'mcp-servers', 'iq-gate',
 ])
 
 export async function loadCatalog(repo = root) {
@@ -361,7 +361,7 @@ export async function validateMarketplaces(repo = root) {
   }
 
   const optional = optionalModuleIds(catalog).sort().join(' ')
-  const fallback = 'crawl4ai hallmark no-mistakes playwright shared-config status-line treehouse'
+  const fallback = 'crawl4ai hallmark iq-gate no-mistakes playwright shared-config status-line treehouse'
   const expectedOptional = fallback.split(' ').sort().join(' ')
   if (optional !== expectedOptional) {
     errors.push(`optional module ids drifted from installer fallback (${optional} vs ${expectedOptional})`)

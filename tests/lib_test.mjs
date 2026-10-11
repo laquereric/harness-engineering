@@ -4225,3 +4225,220 @@ test('ops-cron-lifecycle: ensure/disable are gated and use install/disable scrip
   assert.equal(idle.reason, 'disarmed')
   assert.ok(disableCalls.some((c) => c.cmd === 'bash' && c.args?.[0] === disable))
 })
+
+// ---- IQ gate bridge (ADR-0023): one CpCp seam, thin host attach, fail-closed preflight -------------------
+import {
+  IQ_GATE_HOSTS,
+  IQ_GATE_REASONS,
+  claudeSettingsCandidates,
+  iqGateEnabled,
+  iqGateHostArgs,
+  iqGatePreflight,
+  iqSeamUrl,
+  resolveClaudeSettings,
+  seamHealthy,
+} from '../skills/generator/lib/iq-gate.mjs'
+import { buildHostCommand, runHostAgentSession } from '../skills/generator/adapters/hosts.mjs'
+import { IQ_GATE_RULE, CPCP_BROWSER_CLIENT, featurePrompt as iqFeaturePrompt } from '../skills/generator/prompts/feature.mjs'
+import { createServer } from 'node:http'
+import { spawn as spawnAsync } from 'node:child_process'
+
+test('iq-gate: off by default, on only with HARNESS_IQ_GATE=1', () => {
+  assert.equal(iqGateEnabled({}), false)
+  assert.equal(iqGateEnabled({ HARNESS_IQ_GATE: 'true' }), false)
+  assert.equal(iqGateEnabled({ HARNESS_IQ_GATE: '1' }), true)
+  assert.equal(iqSeamUrl({}), 'http://127.0.0.1:8099')
+  assert.equal(iqSeamUrl({ IQ_SEAM_URL: 'http://127.0.0.1:9099/' }), 'http://127.0.0.1:9099')
+  assert.deepEqual([...IQ_GATE_HOSTS], ['claude', 'opencode'])
+})
+
+test('iq-gate: Claude hook settings resolve explicit env, then project, then user, then iq-claude', () => {
+  const env = { HARNESS_IQ_CLAUDE_SETTINGS: '/explicit/settings.json' }
+  const list = claudeSettingsCandidates({ env, cwd: '/proj', home: '/home/u' })
+  assert.deepEqual(list, [
+    '/explicit/settings.json',
+    '/proj/.harness/iq-gate/claude-settings.json',
+    '/home/u/.local/share/harness/iq-gate/claude-settings.json',
+    '/home/u/.iq/claude-hook-settings.json',
+  ])
+  const onlyUser = (p) => p === '/home/u/.local/share/harness/iq-gate/claude-settings.json'
+  assert.equal(resolveClaudeSettings({ env: {}, cwd: '/proj', home: '/home/u', exists: onlyUser }), '/home/u/.local/share/harness/iq-gate/claude-settings.json')
+  assert.equal(resolveClaudeSettings({ env: {}, cwd: '/proj', home: '/home/u', exists: () => false }), null)
+  // explicit path is authoritative: missing -> null even when a discoverable file exists (no silent fallback)
+  assert.equal(resolveClaudeSettings({ env, cwd: '/proj', home: '/home/u', exists: onlyUser }), null)
+  assert.equal(resolveClaudeSettings({ env, cwd: '/proj', home: '/home/u', exists: () => true }), '/explicit/settings.json')
+})
+
+test('iq-gate: host args attach Claude with --settings and never throw when missing', () => {
+  const exists = (p) => p === '/proj/.harness/iq-gate/claude-settings.json'
+  assert.deepEqual(iqGateHostArgs('claude', { env: {}, cwd: '/proj', exists }), [])
+  assert.deepEqual(iqGateHostArgs('claude', { env: { HARNESS_IQ_GATE: '1' }, cwd: '/proj', home: '/h', exists }), ['--settings', '/proj/.harness/iq-gate/claude-settings.json'])
+  assert.deepEqual(iqGateHostArgs('claude', { env: { HARNESS_IQ_GATE: '1' }, cwd: '/x', home: '/h', exists: () => false }), [])
+  assert.deepEqual(iqGateHostArgs('opencode', { env: { HARNESS_IQ_GATE: '1' }, exists }), [])
+})
+
+test('iq-gate: buildHostCommand appends --settings for claude only under the gate', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'iq-gate-'))
+  const settings = join(dir, '.harness', 'iq-gate', 'claude-settings.json')
+  mkdirSync(dirname(settings), { recursive: true })
+  writeFileSync(settings, '{"hooks":{}}')
+  const prev = { gate: process.env.HARNESS_IQ_GATE, explicit: process.env.HARNESS_IQ_CLAUDE_SETTINGS }
+  try {
+    delete process.env.HARNESS_IQ_GATE
+    assert.deepEqual(buildHostCommand('claude', 'p'), ['claude', ['-p', 'p']])
+    process.env.HARNESS_IQ_GATE = '1'
+    process.env.HARNESS_IQ_CLAUDE_SETTINGS = settings
+    assert.deepEqual(buildHostCommand('claude', 'p'), ['claude', ['-p', '--settings', settings, 'p']])
+    assert.deepEqual(buildHostCommand('claude', 'p', 'm'), ['claude', ['-p', '--model', 'm', '--settings', settings, 'p']])
+    assert.deepEqual(buildHostCommand('codex', 'p'), ['codex', ['exec', '--dangerously-bypass-approvals-and-sandbox', 'p']])
+  } finally {
+    if (prev.gate === undefined) delete process.env.HARNESS_IQ_GATE; else process.env.HARNESS_IQ_GATE = prev.gate
+    if (prev.explicit === undefined) delete process.env.HARNESS_IQ_CLAUDE_SETTINGS; else process.env.HARNESS_IQ_CLAUDE_SETTINGS = prev.explicit
+  }
+})
+
+test('iq-gate: preflight is a value, fails closed on no adapter / no settings / seam down, admits when up', async () => {
+  const off = await iqGatePreflight({ harness: 'codex', env: {} })
+  assert.deepEqual(off, { ok: true, gated: false })
+
+  const env = { HARNESS_IQ_GATE: '1', IQ_SEAM_URL: 'http://127.0.0.1:1' }
+  const noAdapter = await iqGatePreflight({ harness: 'codex', env })
+  assert.equal(noAdapter.ok, false)
+  assert.equal(noAdapter.reason, IQ_GATE_REASONS.NO_ADAPTER)
+
+  const noSettings = await iqGatePreflight({ harness: 'claude', env, exists: () => false })
+  assert.equal(noSettings.ok, false)
+  assert.equal(noSettings.reason, IQ_GATE_REASONS.NO_SETTINGS)
+
+  const down = await iqGatePreflight({ harness: 'opencode', env, get: async () => 0 })
+  assert.equal(down.ok, false)
+  assert.equal(down.reason, IQ_GATE_REASONS.SEAM_UNREACHABLE)
+  assert.match(down.detail, /fail closed/)
+
+  const up = await iqGatePreflight({ harness: 'claude', env, exists: () => true, get: async (url) => (url.endsWith('/healthz') ? 200 : 404) })
+  assert.deepEqual(up, { ok: true, gated: true, seam: 'http://127.0.0.1:1' })
+  const notOk = await iqGatePreflight({ harness: 'claude', env, exists: () => true, get: async () => 500 })
+  assert.equal(notOk.reason, IQ_GATE_REASONS.SEAM_UNREACHABLE)
+})
+
+test('iq-gate: seamHealthy talks real HTTP and treats anything but 200 as down', async () => {
+  const server = createServer((req, res) => {
+    if (req.url === '/healthz') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}') }
+    else { res.writeHead(404); res.end() }
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const url = `http://127.0.0.1:${server.address().port}`
+  try {
+    assert.equal(await seamHealthy(url), true)
+    assert.equal(await seamHealthy(`${url}/nope`), false)
+  } finally {
+    await new Promise((r) => server.close(r))
+  }
+  assert.equal(await seamHealthy('http://127.0.0.1:1', { timeoutMs: 300 }), false)
+})
+
+test('iq-gate: runHostAgentSession refuses to spawn under the gate when the seam is down', async () => {
+  const prev = { gate: process.env.HARNESS_IQ_GATE, seam: process.env.IQ_SEAM_URL, explicit: process.env.HARNESS_IQ_CLAUDE_SETTINGS }
+  try {
+    process.env.HARNESS_IQ_GATE = '1'
+    process.env.IQ_SEAM_URL = 'http://127.0.0.1:1'
+    process.env.HARNESS_IQ_CLAUDE_SETTINGS = '/definitely/missing.json'
+    const result = await runHostAgentSession({ program: 'claude', args: ['-p', 'x'], cwd: tmpdir(), timeoutMs: 1000 })
+    assert.equal(result.ok, false)
+    assert.equal(result.iqGate.reason, IQ_GATE_REASONS.NO_SETTINGS)
+    assert.equal(result.parsed, null)
+  } finally {
+    if (prev.gate === undefined) delete process.env.HARNESS_IQ_GATE; else process.env.HARNESS_IQ_GATE = prev.gate
+    if (prev.seam === undefined) delete process.env.IQ_SEAM_URL; else process.env.IQ_SEAM_URL = prev.seam
+    if (prev.explicit === undefined) delete process.env.HARNESS_IQ_CLAUDE_SETTINGS; else process.env.HARNESS_IQ_CLAUDE_SETTINGS = prev.explicit
+  }
+})
+
+test('iq-gate: worker prompts carry the governed-browser rule only when the gate is on', () => {
+  const feature = { id: 'WI-1', context: 'ctx', acceptance_checks: ['AC-001'], description: 'd', observation_methods: ['browser'] }
+  for (const kind of ['CODING', 'QA', 'INTEGRATION_QA']) {
+    const on = iqFeaturePrompt(kind, feature, 1, null, '/w', { iqGate: true })
+    const off = iqFeaturePrompt(kind, feature, 1, null, '/w', { iqGate: false })
+    assert.ok(on.includes(IQ_GATE_RULE), `${kind} must include the IQ gate rule`)
+    assert.ok(on.includes(CPCP_BROWSER_CLIENT), `${kind} must name the cpcp-browser client`)
+    assert.ok(!off.includes('IQ GATE'), `${kind} must not mention the gate when off`)
+  }
+  assert.match(IQ_GATE_RULE, /Do NOT use Playwright MCP/)
+  assert.ok(existsSync(CPCP_BROWSER_CLIENT))
+})
+
+// ---- scripts/cpcp-browser.mjs: the harness-side CpCp browser client (docs/iq-standards.md §3) --------------
+import { OPS as BROWSER_OPS, buildEnvelope, exitCodeFor, parseArgs as parseBrowserArgs, run as runBrowser } from '../scripts/cpcp-browser.mjs'
+
+test('cpcp-browser: envelope carries a required operationId, maps ops, refuses unknown ops as a value', () => {
+  const env = buildEnvelope('navigate', { url: 'http://x/' }, 'iq:op:1')
+  assert.deepEqual(env, { operationId: 'iq:op:1', op: 'browser.navigate', params: { url: 'http://x/' } })
+  assert.equal(buildEnvelope('rm_rf', {}), null)
+  assert.ok(buildEnvelope('title').operationId.startsWith('iq:op:harness-'))
+  assert.deepEqual(parseBrowserArgs(['eval', '--expr', 'document.title', '--op-id', 'iq:op:9', '--endpoint', 'http://h:1']),
+    { op: 'eval', opts: { 'op-id': 'iq:op:9', endpoint: 'http://h:1' }, params: { expr: 'document.title' } })
+  assert.equal(Object.keys(BROWSER_OPS).length, 5)
+  assert.equal(exitCodeFor({ status: 'ok' }), 0)
+  assert.equal(exitCodeFor({ status: 'refused', reason: 'no_permit' }), 1)
+  assert.equal(exitCodeFor({ status: 'refused', reason: 'endpoint_unreachable' }), 2)
+})
+
+test('cpcp-browser: posts to /_cpcp, replays by operationId, and fails closed when unreachable', async () => {
+  const seen = new Map()
+  const server = createServer((req, res) => {
+    let body = ''
+    req.on('data', (c) => { body += c })
+    req.on('end', () => {
+      if (req.url === '/healthz') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ ok: true, ops: Object.values(BROWSER_OPS) })) }
+      if (req.url !== '/_cpcp') { res.writeHead(404); return res.end('{}') }
+      const env = JSON.parse(body)
+      if (!env.operationId) { res.writeHead(409); return res.end(JSON.stringify({ operation_id: '', status: 'refused', reason: 'operation_id_required' })) }
+      if (seen.has(env.operationId)) { res.writeHead(200); return res.end(JSON.stringify(seen.get(env.operationId))) }
+      const r = env.op === 'browser.navigate'
+        ? { operation_id: env.operationId, status: 'ok', result: { url: env.params.url, title: 'T', nonce: seen.size } }
+        : { operation_id: env.operationId, status: 'refused', reason: `not_admitted:${env.op}` }
+      seen.set(env.operationId, r)
+      res.writeHead(r.status === 'ok' ? 200 : 409, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(r))
+    })
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const endpoint = `http://127.0.0.1:${server.address().port}`
+  try {
+    const health = await runBrowser(['health'], { env: { IQ_BROWSER_URL: endpoint } })
+    assert.equal(health.response.status, 'ok')
+
+    const first = await runBrowser(['navigate', '--url', 'http://app/', '--op-id', 'iq:op:a'], { env: { IQ_BROWSER_URL: endpoint } })
+    assert.equal(first.response.status, 'ok')
+    assert.equal(exitCodeFor(first.response), 0)
+    const replay = await runBrowser(['navigate', '--url', 'http://other/', '--op-id', 'iq:op:a'], { env: { IQ_BROWSER_URL: endpoint } })
+    assert.deepEqual(replay.response, first.response, 'a repeated operationId must replay the first response')
+
+    const refused = await runBrowser(['screenshot', '--endpoint', endpoint], { env: {} })
+    assert.equal(refused.response.status, 'refused')
+    assert.equal(exitCodeFor(refused.response), 1)
+
+    const unknown = await runBrowser(['rm_rf', '--endpoint', endpoint], { env: {} })
+    assert.equal(unknown.response.reason, 'not_admitted:rm_rf')
+
+    // The CLI is a separate process; spawn it asynchronously so this test's event loop can serve its request.
+    const cli = await new Promise((resolve) => {
+      const child = spawnAsync(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'cpcp-browser.mjs'), 'navigate', '--url', 'http://app/'], {
+        env: { ...process.env, IQ_BROWSER_URL: endpoint },
+      })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (c) => { stdout += c })
+      child.stderr.on('data', (c) => { stderr += c })
+      child.on('close', (status) => resolve({ status, stdout, stderr }))
+    })
+    assert.equal(cli.status, 0, cli.stderr)
+    assert.equal(JSON.parse(cli.stdout).status, 'ok')
+  } finally {
+    await new Promise((r) => server.close(r))
+  }
+  const down = await runBrowser(['title', '--endpoint', 'http://127.0.0.1:1'], { env: {} })
+  assert.equal(down.response.status, 'refused')
+  assert.equal(down.response.reason, 'endpoint_unreachable')
+  assert.equal(exitCodeFor(down.response), 2)
+})

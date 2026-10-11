@@ -123,7 +123,7 @@ The orchestrator picks them per phase from `agents/` and optional `.harness/role
 | --- | --- | --- |
 | `initializer` | Scaffold (once) | Queue + `init.sh` from `skills/generator/templates/init.sh` (`start|stop|restart|status|help`) + first commit - never implements features |
 | `coding-agent` | Code | Implements one Work Item in its worktree |
-| `qa-agent` | QA / Integrated Verification | Independent browser or HTTP checks |
+| `qa-agent` | QA / Integrated Verification | Independent browser or HTTP checks (under `HARNESS_IQ_GATE=1`, through a governed browser: the IQ CpCp browser or the IQ app webview) |
 
 ```mermaid
 flowchart TD
@@ -215,6 +215,7 @@ All three steps use arrow-key menus: scope, then host (`all` when multiple hosts
 `--yes` / `-Yes` selects every compatible checklist item; `--no` / `-No` selects only `harness`. Without a TTY (or with `--yes` / `--no`), scope defaults to `user` and you must pass `--cli` when more than one host is detected.
 For Cursor, harness lands as a local plugin under `.cursor/plugins/local/harness/` (IDE) and copies each skill into `.cursor/skills/` as real `harness-*` directories (not symlinks) so the `agent` CLI slash menu can see `/harness-supervisor` and the rest.
 User-only modules (`status-line`, `shared-config`, `treehouse`) are skipped for project scope.
+The optional `iq-gate` module (Claude, OpenCode) attaches worker hosts to the IQ **CpCp seam** so every tool call and every browser check is a permit-checked, journaled Decision; run the generator with `HARNESS_IQ_GATE=1` to turn it on (seam preflight, fail closed). It reads the IQ adapters from `IQ_REPO` (default `~/NoIcloud/Iq`). See [IQ standards](docs/iq-standards.md).
 The optional status line reads the CLI payload once per render, badges the model with its effort mode (`low`/`medium`/`high`/`xhigh`/`max`, omitted on models without one), shows 5h and 7d renew countdowns when reset timestamps are present, and only enumerates linked Git worktrees when the repo actually has a worktree registry.
 Windows: [`install.ps1`](install.ps1). Details: [installer docs](docs/installer/README.md).
 
@@ -457,6 +458,7 @@ uv tool uninstall omnigent 2>/dev/null || true
 | [Complete guide](https://vinicius91carvalho.github.io/harness-engineering/) | Full workflow, examples, role routing |
 | [CONTEXT.md](CONTEXT.md) | Ubiquitous language + bounded contexts |
 | [Plugins](docs/plugins.md) | Optional integrations |
+| [IQ standards](docs/iq-standards.md) | The CpCp gate seam, browser observation through CpCp, and the IQ app webview as a governed drive surface (`iq-gate`, `HARNESS_IQ_GATE=1`) |
 | [Installer](docs/installer/README.md) | Scope, host selection, flags, and dry runs |
 | [Architecture decisions](docs/adr/) | Why the workflow is designed this way |
 

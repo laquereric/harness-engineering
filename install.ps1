@@ -79,7 +79,7 @@ $CodexMarketplace = "harness-engineering"
 $NoMistakesInstaller = "https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.ps1"
 $TreehouseInstaller = "https://kunchenguid.github.io/treehouse/install.ps1"
 $RepoRoot = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
-$DefaultOptional = @("hallmark", "no-mistakes", "treehouse", "playwright", "crawl4ai", "status-line", "shared-config")
+$DefaultOptional = @("hallmark", "no-mistakes", "treehouse", "playwright", "crawl4ai", "iq-gate", "status-line", "shared-config")
 $Optional = $DefaultOptional
 if ($RepoRoot -and (Test-Path (Join-Path $RepoRoot "config/installable-catalog.json")) -and (Get-Command node -ErrorAction SilentlyContinue)) {
   $catalogOptional = & node (Join-Path $RepoRoot "scripts/install-reconcile.mjs") optional-ids 2>$null
@@ -94,6 +94,7 @@ $PluginClis = @{
   playwright = @("claude", "codex", "opencode", "agent")
   crawl4ai = @("claude", "codex", "opencode", "pi", "agent")
   "status-line" = @("claude", "codex"); "shared-config" = @("claude")
+  "iq-gate" = @("claude", "opencode")
 }
 
 if ($Yes -and $No) { throw "-Yes and -No are mutually exclusive" }
@@ -151,6 +152,7 @@ function Get-MenuBlurb([string]$Kind, [string]$Item) {
     "install:crawl4ai" { return "Web crawling and structured extraction. Installs the Python package plus a bundled skill per host." }
     "install:status-line" { return "Custom status bar for Claude; built-in status items for Codex (model, git branch, context usage)." }
     "install:shared-config" { return "Atomically merge the project shareable Claude settings while preserving your existing preferences." }
+    "install:iq-gate" { return "IQ governance gate: attach Claude Code (PreToolUse hook) and OpenCode (plugin) to the IQ CpCp seam; needs an IQ checkout (IQ_REPO)." }
     default { return "" }
   }
 }
@@ -784,6 +786,74 @@ function Install-PlaywrightMcp {
   }
 }
 
+# IQ governance gate (ADR-0023, docs/iq-standards.md): wire each host's thin adapter to the ONE CpCp seam.
+# Adapters are read from the IQ checkout (IQ_REPO); nothing is vendored and the seam is not started here.
+function Get-IqGateDir {
+  if ($script:Scope -eq "project") { return Join-Path $script:ProjectDir ".harness/iq-gate" }
+  return Join-Path $ReceiptDir "iq-gate"
+}
+
+function Get-ClaudeCommandsRoot {
+  if ($script:Scope -eq "project") { return Join-Path $script:ProjectDir ".claude/commands" }
+  return Join-Path $HOME ".claude/commands"
+}
+
+function Install-IqGate {
+  $iqRepo = if ($env:IQ_REPO) { $env:IQ_REPO } else { Join-Path $HOME "NoIcloud/Iq" }
+  $adapters = Join-Path $iqRepo "Development/UseCase/UC_IqManagedHarnesses/adapters"
+  $hookDir = Join-Path $adapters "claude-code-hook"
+  $gateDir = Get-IqGateDir
+  $seam = if ($env:IQ_SEAM_URL) { $env:IQ_SEAM_URL } else { "http://127.0.0.1:8099" }
+  $hosts = Get-ModuleHosts "iq-gate"
+  if ($DryRun) {
+    Write-Host "DRY RUN - wire IQ gate (CpCp seam adapters from $adapters) for: $($Targets -join ', ') (scope: $script:Scope)"
+    foreach ($target in $Targets) {
+      if ($hosts -notcontains $target) { continue }
+      if ($target -eq "claude") { Write-Host "DRY RUN - write Claude PreToolUse/SessionStart hook settings to $(Join-Path $gateDir 'claude-settings.json')" }
+      if ($target -eq "opencode") { Write-Host "DRY RUN - install OpenCode plugin to $(Join-Path (Get-OpenCodeBase) 'plugins/iq-harness-gate.ts')" }
+    }
+    return
+  }
+  $gateHook = Join-Path $hookDir "iq-gate-hook.py"
+  $banner = Join-Path $hookDir "iq-session-banner.py"
+  $ocPlugin = Join-Path $adapters "opencode/iq-harness-gate.ts"
+  if (-not ((Test-Path $gateHook) -and (Test-Path $banner) -and (Test-Path $ocPlugin))) {
+    throw "iq-gate: IQ adapters not found under $adapters (set IQ_REPO to your Iq checkout)"
+  }
+  foreach ($target in $Targets) {
+    if ($hosts -notcontains $target) { continue }
+    switch ($target) {
+      claude {
+        New-Item -ItemType Directory -Force -Path $gateDir | Out-Null
+        $settings = [ordered]@{
+          hooks = [ordered]@{
+            SessionStart = @(@{ hooks = @(@{ type = "command"; command = $banner }) })
+            PreToolUse = @(@{ matcher = ".*"; hooks = @(@{ type = "command"; command = $gateHook }) })
+          }
+        }
+        $settingsPath = Join-Path $gateDir "claude-settings.json"
+        ($settings | ConvertTo-Json -Depth 8) | Set-Content -Path $settingsPath -Encoding UTF8
+        $cmd = Join-Path $hookDir "commands/iq.md"
+        if (Test-Path $cmd) {
+          $cmdRoot = Get-ClaudeCommandsRoot
+          New-Item -ItemType Directory -Force -Path $cmdRoot | Out-Null
+          Copy-Item $cmd (Join-Path $cmdRoot "iq.md") -Force
+        }
+        Write-InstallReceipt "iq-gate" @{ host = "claude"; settings = $settingsPath; seam = $seam }
+        Write-Host "install.ps1: IQ gate for Claude -> $settingsPath (workers attach with HARNESS_IQ_GATE=1)"
+      }
+      opencode {
+        $dest = Join-Path (Get-OpenCodeBase) "plugins"
+        New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        Copy-Item $ocPlugin (Join-Path $dest "iq-harness-gate.ts") -Force
+        Write-InstallReceipt "iq-gate" @{ host = "opencode"; plugin = (Join-Path $dest "iq-harness-gate.ts"); seam = $seam }
+        Write-Host "install.ps1: IQ gate for OpenCode -> $(Join-Path $dest 'iq-harness-gate.ts')"
+      }
+    }
+  }
+  Write-Host "install.ps1: the seam must be up at $seam before governed runs (iq-seam-install, or iq-seam-dev.sh offline)"
+}
+
 function Install-CodexProjectMarketplace {
   $source = Get-Repository
   $codexDir = Join-Path $script:ProjectDir ".codex-plugin"
@@ -882,6 +952,7 @@ foreach ($item in $Selected) {
     continue
   }
   if ($item -eq "shared-config") { Apply-ClaudeSharedConfig; continue }
+  if ($item -eq "iq-gate") { Install-IqGate; continue }
   foreach ($target in $Targets) {
     if ((Get-ModuleHosts $item) -notcontains $target) { continue }
     switch ($target) {
